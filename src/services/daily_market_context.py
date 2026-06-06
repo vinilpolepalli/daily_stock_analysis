@@ -113,10 +113,25 @@ class DailyMarketContextService:
             require_query_id_match=require_query_id_match,
         )
 
+        if force_refresh:
+            with self._lock:
+                cached = self._cache.pop(cache_key, None)
+                if cached is not None:
+                    logger.debug(
+                        "强制刷新模式下清除当前查询的大盘上下文缓存: key=%s",
+                        cache_key,
+                    )
+
         if not force_refresh:
             cached = self._cache.get(cache_key)
-            if cached is not None:
+            if cached is not None and self._is_query_scoped_cache_compatible(
+                cached,
+                current_query_id=current_query_id,
+            ):
                 return cached
+
+            if cached is not None:
+                self._cache.pop(cache_key, None)
 
             history_context = self._load_same_day_history(
                 region=normalized_region,
@@ -148,8 +163,13 @@ class DailyMarketContextService:
         with self._lock:
             if not force_refresh:
                 cached = self._cache.get(cache_key)
-                if cached is not None:
+                if cached is not None and self._is_query_scoped_cache_compatible(
+                    cached,
+                    current_query_id=current_query_id,
+                ):
                     return cached
+                if cached is not None:
+                    self._cache.pop(cache_key, None)
                 history_context = self._load_same_day_history(
                     region=normalized_region,
                     target_date=context_date,
@@ -239,6 +259,23 @@ class DailyMarketContextService:
             if context is not None:
                 return context
         return None
+
+    @staticmethod
+    def _is_query_scoped_cache_compatible(
+        context: DailyMarketContext,
+        current_query_id: Optional[str] = None,
+    ) -> bool:
+        if not isinstance(current_query_id, str) or not current_query_id.strip():
+            return True
+
+        if context.source != "analysis_history":
+            return True
+
+        cached_query_id = (context.query_id or "").strip()
+        if not cached_query_id:
+            return False
+
+        return cached_query_id == current_query_id.strip()
 
     @staticmethod
     def _cache_key(

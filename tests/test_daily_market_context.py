@@ -21,6 +21,7 @@ def _history_record(
     region: str = "cn",
     payload_date: str | None = None,
     query_id: str = "market-review-q",
+    summary: str = "市场退潮，高风险，建议观望，仓位上限30%。",
 ) -> SimpleNamespace:
     payload = {
         "kind": "market_review",
@@ -30,10 +31,10 @@ def _history_record(
             {
                 "key": "overview",
                 "title": "概览",
-                "markdown": "市场退潮，高风险，建议观望，仓位上限30%。",
+                "markdown": summary,
             }
         ],
-        "markdown_report": "市场退潮，高风险，建议观望，仓位上限30%。",
+        "markdown_report": summary,
     }
     if payload_date:
         payload["date"] = payload_date
@@ -48,12 +49,60 @@ def _history_record(
         query_id=query_id,
         code="MARKET",
         report_type="market_review",
-        analysis_summary="市场退潮，高风险，建议观望，仓位上限30%。",
-        news_content="市场退潮，高风险，建议观望，仓位上限30%。",
+        analysis_summary=summary,
+        news_content=summary,
         raw_result=json.dumps({"raw_response": "raw markdown"}, ensure_ascii=False),
         context_snapshot=json.dumps(snapshot, ensure_ascii=False),
         created_at=created_at,
     )
+
+
+def test_query_scoped_cache_can_skip_stale_analysis_history_context() -> None:
+    db = MagicMock()
+    db.get_analysis_history.side_effect = [
+        [_history_record(created_at=datetime(2026, 6, 6, 9, 30), query_id="old-q", summary="旧复盘")],
+        [
+            _history_record(
+                created_at=datetime(2026, 6, 6, 9, 45),
+                query_id="new-q",
+                summary="新复盘",
+            )
+        ],
+    ]
+    service = DailyMarketContextService(
+        db_manager=db,
+        today_fn=lambda: date(2026, 6, 6),
+    )
+
+    with patch("src.services.daily_market_context.run_market_review") as run_review:
+        first = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="zh"),
+            notifier=MagicMock(),
+            analyzer=MagicMock(),
+            search_service=MagicMock(),
+            allow_generate=False,
+        )
+
+    assert first is not None
+    assert first.summary == "旧复盘"
+
+    with patch("src.services.daily_market_context.run_market_review") as run_review:
+        second = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="zh"),
+            notifier=MagicMock(),
+            analyzer=MagicMock(),
+            search_service=MagicMock(),
+            allow_generate=False,
+            current_query_id="new-q",
+        )
+
+    assert second is not None
+    assert second.summary == "新复盘"
+    assert second.query_id == "new-q"
+    run_review.assert_not_called()
+    assert db.get_analysis_history.call_count == 2
 
 
 def test_reuses_same_day_market_review_history_without_running_review() -> None:
@@ -81,6 +130,58 @@ def test_reuses_same_day_market_review_history_without_running_review() -> None:
     assert "市场退潮" in context.summary
     assert "high_risk" in context.risk_tags
     assert "low_position_cap" in context.risk_tags
+    run_review.assert_not_called()
+
+
+def test_force_refresh_reads_latest_same_day_history_after_stale_cache() -> None:
+    db = MagicMock()
+    db.get_analysis_history.side_effect = [
+        [
+            _history_record(
+                created_at=datetime(2026, 6, 6, 9, 30),
+                summary="旧复盘",
+                query_id="old-q",
+            )
+        ],
+        [
+            _history_record(
+                created_at=datetime(2026, 6, 6, 10, 30),
+                summary="新复盘",
+                query_id="new-q",
+            )
+        ],
+    ]
+    service = DailyMarketContextService(
+        db_manager=db,
+        today_fn=lambda: date(2026, 6, 6),
+    )
+
+    with patch("src.services.daily_market_context.run_market_review") as run_review:
+        first = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="zh"),
+            notifier=MagicMock(),
+            analyzer=MagicMock(),
+            search_service=MagicMock(),
+            allow_generate=False,
+        )
+    with patch("src.services.daily_market_context.run_market_review") as run_review:
+        refreshed = service.get_context(
+            region="cn",
+            config=SimpleNamespace(report_language="zh"),
+            notifier=MagicMock(),
+            analyzer=MagicMock(),
+            search_service=MagicMock(),
+            force_refresh=True,
+            allow_generate=False,
+        )
+
+    assert first is not None
+    assert first.summary == "旧复盘"
+    assert refreshed is not None
+    assert refreshed.summary == "新复盘"
+    assert refreshed.source == "analysis_history"
+    assert db.get_analysis_history.call_count == 2
     run_review.assert_not_called()
 
 

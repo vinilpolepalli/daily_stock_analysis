@@ -672,6 +672,16 @@ class MainScheduleModeTestCase(unittest.TestCase):
                     return_full_report=True,
                     require_current_query_match=True,
                 ),
+                unittest.mock.call(
+                    config,
+                    pipeline=pipeline,
+                    region="cn,us",
+                    no_market_review=False,
+                    allow_generate=False,
+                    force_refresh=True,
+                    target_date=target_date,
+                    return_full_report=True,
+                ),
             ]
         )
         run_with_lock.assert_called_once()
@@ -780,6 +790,16 @@ class MainScheduleModeTestCase(unittest.TestCase):
                     target_date=target_date,
                     return_full_report=True,
                     require_current_query_match=True,
+                ),
+                unittest.mock.call(
+                    config,
+                    pipeline=pipeline,
+                    region="cn",
+                    no_market_review=False,
+                    allow_generate=False,
+                    force_refresh=True,
+                    target_date=target_date,
+                    return_full_report=True,
                 ),
             ]
         )

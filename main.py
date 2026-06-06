@@ -505,6 +505,7 @@ def _prime_daily_market_context(
     region: str,
     no_market_review: bool,
     allow_generate: bool,
+    force_refresh: bool = False,
     target_date: Optional[date] = None,
     return_full_report: bool = False,
     require_current_query_match: bool = False,
@@ -529,7 +530,7 @@ def _prime_daily_market_context(
         "notifier": pipeline.notifier,
         "analyzer": pipeline.analyzer,
         "search_service": pipeline.search_service,
-        "force_refresh": False,
+        "force_refresh": force_refresh,
         "allow_generate": allow_generate,
         "persist_market_review_history": False,
         "target_date": target_date,
@@ -712,6 +713,19 @@ def run_full_analysis(
                 if market_report:
                     market_context_full_report = market_report
                     market_context_summary = market_report
+                    (
+                        market_context_summary,
+                        market_context_full_report,
+                    ) = _prime_daily_market_context(
+                        config,
+                        pipeline=pipeline,
+                        region=market_review_region,
+                        no_market_review=args.no_market_review,
+                        allow_generate=False,
+                        force_refresh=True,
+                        target_date=daily_market_context_target_date,
+                        return_full_report=True,
+                    )
 
         # 1. 运行个股分析
         results = pipeline.run(
@@ -776,6 +790,7 @@ def run_full_analysis(
                     send_notification=not args.no_notify,
                     merge_notification=merge_notification,
                     override_region=market_review_region,
+                    query_id=query_id,
                 )
 
             # 如果复盘仍未执行成功，再做一次复用历史/缓存读取（防止与并发运行竞态）。
