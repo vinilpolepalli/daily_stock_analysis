@@ -299,6 +299,90 @@ class RuntimeSchedulerServiceTestCase(unittest.TestCase):
         scheduler.background_tasks[0]["task"]()  # type: ignore[index]
         fake_worker.run_once.assert_called_once()
 
+    def test_rebuild_does_not_duplicate_event_monitor_background_task_registration(self) -> None:
+        created_schedulers = []
+        registration_log = []
+
+        class _FakeScheduler:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.background_tasks = []
+                self.daily_task = None
+                self.daily_task_run_immediately = None
+                self._jobs = []
+                self.stopped = False
+                created_schedulers.append(self)
+
+            def set_daily_task(self, task, run_immediately: bool) -> None:
+                self.daily_task = task
+                self.daily_task_run_immediately = run_immediately
+
+            def add_background_task(
+                self,
+                task: callable,
+                interval_seconds: int,
+                run_immediately: bool,
+                name: str | None = None,
+            ) -> None:
+                registration_log.append((name, interval_seconds, run_immediately))
+                self.background_tasks.append({
+                    "task": task,
+                    "interval_seconds": interval_seconds,
+                    "run_immediately": run_immediately,
+                    "name": name,
+                })
+
+            def run(self) -> None:
+                return None
+
+            def stop(self) -> None:
+                self.stopped = True
+                return None
+
+            @property
+            def schedule(self):
+                class _Namespace:
+                    @staticmethod
+                    def get_jobs():
+                        return []
+
+                return _Namespace
+
+            @property
+            def schedule_time(self):
+                return self.kwargs.get("schedule_time")
+
+        fake_worker = MagicMock()
+        fake_worker.run_once.return_value = {"triggered": 2}
+
+        config = SimpleNamespace(
+            schedule_enabled=True,
+            schedule_time="18:00",
+            schedule_times=["18:00"],
+            agent_event_monitor_enabled=True,
+            agent_event_monitor_interval_minutes=7,
+        )
+
+        service = RuntimeSchedulerService(config_provider=lambda: config)
+        service._reload_config = lambda: config
+
+        with patch(
+            "src.services.runtime_scheduler.Scheduler",
+            _FakeScheduler,
+        ), patch(
+            "src.services.runtime_scheduler.threading.Thread",
+            _NoopThread,
+        ), patch("src.services.alert_worker.AlertWorker", return_value=fake_worker):
+            service.start()
+            config.schedule_times = ["15:10"]
+            service.start()
+
+        self.assertEqual(len(created_schedulers), 2)
+        self.assertEqual(len(registration_log), 1)
+        self.assertEqual(registration_log[0], ("agent_event_monitor", 420, True))
+        self.assertEqual(len(created_schedulers[0].background_tasks), 1)
+        self.assertEqual(len(created_schedulers[1].background_tasks), 0)
+
     def test_force_enabled_survives_time_reconcile_until_explicit_enabled_update(self) -> None:
         fake_schedule = _FakeScheduleModule()
         config = SimpleNamespace(
