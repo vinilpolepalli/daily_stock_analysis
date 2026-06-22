@@ -1,12 +1,12 @@
-name: 每日股票分析
+name: Daily Stock Analysis
 
 on:
-  # 定时触发 - 每天北京时间 18:00 (UTC 10:00)
+  # Schedule: after market close + weekends
   schedule:
       - cron: '0 20 * * 1-5'    # 4PM ET weekdays (after market close)
       - cron: '0 12 * * 0,6'   # Weekends noon UTC (extended analysis)
   
-  # 手动触发
+  # Manual trigger
   workflow_dispatch:
     inputs:
       mode:
@@ -24,7 +24,7 @@ on:
         default: false
         type: boolean
 
-# 并发控制：同一时间只运行一个分析任务
+# Concurrency: only one analysis job at a time
 concurrency:
   group: stock-analysis
   cancel-in-progress: false
@@ -36,28 +36,28 @@ jobs:
     timeout-minutes: ${{ fromJSON(vars.ANALYSIS_TIMEOUT_MINUTES || '30') }}
     
     steps:
-      - name: 随机延迟（避免固定时间访问）
+      - name: Random delay (avoid rate limits)
         run: sleep $((RANDOM % 60))  # 随机延迟0-60秒启动
       
-      - name: 检出代码
+      - name: Checkout code
         uses: actions/checkout@v5
       
-      - name: 设置 Python 环境
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
           python-version: '3.11'
           cache: 'pip'
       
-      - name: 安装依赖
+      - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
       
-      - name: 创建必要目录
+      - name: Create directories
         run: |
           mkdir -p data logs reports
       
-      - name: 执行股票分析
+      - name: Run stock analysis
         env:
           # ==========================================
           # AI 配置
@@ -476,7 +476,7 @@ jobs:
             python main.py $FORCE_RUN_ARG
           fi
       
-      - name: 上传分析报告
+      - name: Upload analysis report
         uses: actions/upload-artifact@v6
         if: always()
         with:
@@ -486,7 +486,7 @@ jobs:
             logs/
           retention-days: 30
       
-      - name: 显示运行结果
+      - name: Display results
         if: always()
         run: |
           echo ""
